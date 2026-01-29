@@ -1,0 +1,19 @@
+import numpy as np
+
+coords = []
+
+with open("pdb3j6s.ent") as f:
+    for line in f:
+        if line.startswith("ATOM"):
+            parts = line.split()
+            # parts example:
+            # ['ATOM','55','CA','THR','A','55','-141.312','-101.073','-136.163','1.00','0.00','C']
+            x = float(parts[6])
+            y = float(parts[7])
+            z = float(parts[8])
+            coords.append([x, y, z])
+
+matrix = np.array(coords)
+
+print(matrix.shape)
+print(matrix[:10])
