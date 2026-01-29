@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Icosahedral Capsid — All-in-One MVP (Enhanced)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0b0d12; --fg:#e7ecf3; --panel:rgba(0,0,0,0.5); }
+    html, body { margin: 0; height: 100%; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #hud { position: fixed; top: 12px; left: 12px; background: var(--panel); padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.4; backdrop-filter: blur(2px); }
+    #controls { position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; align-items:center; flex-wrap: wrap; max-width: 90vw; background: var(--panel); padding: 8px 10px; border-radius: 10px; }
+    #validation { position: fixed; bottom: 12px; left: 12px; background: var(--panel); padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+    button, input, select, label.badge { background: #1c2333; color:var(--fg); border: 1px solid #2a3550; padding:6px 10px; border-radius: 10px; }
+    button { cursor: pointer; }
+    button:hover { background:#24304a; }
+    input[type=number] { width: 60px; text-align: center; }
+    input[type=range] { width: 180px; padding: 0; }
+    input[type=file] { display: none; }
+    label.badge { font-size:12px; opacity:.85; padding:4px 8px; }
+    .sep { opacity: .3; }
+    #credit { position: fixed; bottom: 10px; right: 12px; opacity: 0.6; font-size: 12px; }
+    canvas { display:block; }
+    table { border-collapse: collapse; }
+    td { padding: 2px 6px; }
+    td.key { opacity:.8; }
+    td.val { font-weight:600; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    T = <span id="tval">1</span> | subunits = <span id="subs">60</span> | R = <span id="rval">1.20</span>
+  </div>
+
+  <div id="controls">
+    <label class="badge">Presets</label>
+    <button data-preset="T1">T=1</button>
+    <button data-preset="T3">T=3</button>
+    <button data-preset="T7">T=7</button>
+    <span class="sep">|</span>
+    <label>h</label><input id="hin" type="number" value="1" min="0" step="1" />
+    <label>k</label><input id="kin" type="number" value="0" min="0" step="1" />
+    <button id="apply">Apply (h,k)</button>
+    <span class="sep">|</span>
+    <label>R</label><input id="rin" type="range" min="0.5" max="3.0" step="0.05" value="1.20" />
+    <span class="sep">|</span>
+    <label class="badge">Glyph</label>
+    <select id="glyphSel">
+      <option value="disc">Disc (capsomer)</option>
+      <option value="cube">Cube</option>
+      <option value="cone">Cone</option>
+    </select>
+    <span class="sep">|</span>
+    <label class="badge">Overlays</label>
+    <label><input id="axes5" type="checkbox" checked /> 5‑fold</label>
+    <label><input id="axes3" type="checkbox" /> 3‑fold</label>
+    <label><input id="axes2" type="checkbox" /> 2‑fold</label>
+    <label><input id="autorot" type="checkbox" checked /> Auto‑rotate</label>
+    <span class="sep">|</span>
+    <label class="badge">View</label>
+    <select id="viewSel">
+      <option value="iso">Isometric</option>
+      <option value="5fold">Along 5‑fold</option>
+      <option value="3fold">Along 3‑fold</option>
+      <option value="2fold">Along 2‑fold</option>
+      <option value="top">Top</option>
+      <option value="side">Side</option>
+    </select>
+    <button id="applyView">Apply view</button>
+    <span class="sep">|</span>
+    <button id="shot">Screenshot</button>
+    <button id="save">Save config</button>
+    <button id="loadBtn">Load config</button>
+    <button id="exportJSON">Export validation (JSON)</button>
+    <button id="exportCSV">Export validation (CSV)</button>
+    <input id="fileInput" type="file" accept=".json,application/json"/>
+  </div>
+
+  <div id="validation">
+    <strong>Validation</strong>
+    <table>
+      <tr><td class="key">T</td><td class="val" id="vT">1</td></tr>
+      <tr><td class="key">Subunits</td><td class="val" id="vSubs">60</td></tr>
+      <tr><td class="key">Pentamers</td><td class="val" id="vPent">12</td></tr>
+      <tr><td class="key">Hexamers</td><td class="val" id="vHex">0</td></tr>
+    </table>
+  </div>
+
+  <div id="credit">Icosahedral Capsid — All‑in‑One MVP (Enhanced)</div>
+
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script>
+  // ===== Helpers & math =====
+  const EPS = 1e-6;
+  const len = v=>Math.hypot(v.x,v.y,v.z);
+  const norm = v=>{ const L=len(v)||1; v.x/=L; v.y/=L; v.z/=L; return v; };
+  const deg = a=>a*Math.PI/180;
+  function T_of(h,k){ return h*h + h*k + k*k; }
+  function countsForT(T){
+    const sub = 60*T;
+    const pent = 12;
+    const hex = (T>=3) ? 10*(T-1) : 0;
+    return {sub, pent, hex};
+  }
+  function canonicalAxis(v){
+    v = norm(v);
+    const comps = [v.x, v.y, v.z];
+    for(let i=0;i<3;i++){ if (Math.abs(comps[i])>1e-12){ if (comps[i] < 0){ v.x=-v.x; v.y=-v.y; v.z=-v.z; } break; } }
+    return [Number(v.x.toFixed(10)), Number(v.y.toFixed(10)), Number(v.z.toFixed(10))].join(',');
+  }
+  function quatFromAxisAngle(ax, ang){
+    const u = norm(ax.clone()); const half = ang*0.5; const s = Math.sin(half); const w = Math.cos(half);
+    let q = new THREE.Quaternion(u.x*s, u.y*s, u.z*s, w);
+    if (q.w < 0){ q.x=-q.x; q.y=-q.y; q.z=-q.z; q.w=-q.w; }
+    return q;
+  }
+
+  // ===== Icosahedron reference =====
+  const phi = (1+Math.sqrt(5))/2;
+  const V = [
+    new THREE.Vector3(0, 1, phi), new THREE.Vector3(0,-1, phi), new THREE.Vector3(0, 1,-phi), new THREE.Vector3(0,-1,-phi),
+    new THREE.Vector3(1, phi,0),  new THREE.Vector3(-1, phi,0), new THREE.Vector3(1,-phi,0),  new THREE.Vector3(-1,-phi,0),
+    new THREE.Vector3(phi,0, 1),  new THREE.Vector3(-phi,0, 1), new THREE.Vector3(phi,0,-1),  new THREE.Vector3(-phi,0,-1)
+  ].map(v=>norm(v));
+
+  let edgeLen = Infinity;
+  for(let i=0;i<V.length;i++) for(let j=i+1;j<V.length;j++){
+    const d = V[i].clone().sub(V[j]).length();
+    if (d>EPS && d<edgeLen) edgeLen = d;
+  }
+  const edges = new Set();
+  for(let i=0;i<V.length;i++) for(let j=i+1;j<V.length;j++){
+    const d = V[i].clone().sub(V[j]).length();
+    if (Math.abs(d-edgeLen) < 1e-6) edges.add(i+","+j);
+  }
+  function hasEdge(i,j){ return edges.has(`${Math.min(i,j)},${Math.max(i,j)}`); }
+
+  const faces=[];
+  for(let i=0;i<V.length;i++) for(let j=i+1;j<V.length;j++) if (hasEdge(i,j))
+    for(let k=j+1;k<V.length;k++) if (hasEdge(i,k) && hasEdge(j,k)) faces.push([i,j,k]);
+
+  // Axes
+  const axes5Map = new Map(); V.forEach((v)=>{ axes5Map.set(canonicalAxis(v.clone()), v.clone()); });
+  const AX5 = [...axes5Map.values()]; // 6
+  const axes3Map = new Map();
+  faces.forEach(f=>{ const c = norm(V[f[0]].clone().add(V[f[1]]).add(V[f[2]]).multiplyScalar(1/3)); axes3Map.set(canonicalAxis(c.clone()), c); });
+  const AX3 = [...axes3Map.values()]; // 10
+  const axes2Map = new Map();
+  edges.forEach(k=>{ const [i,j]=k.split(',').map(Number); const m = norm(V[i].clone().add(V[j]).multiplyScalar(0.5)); axes2Map.set(canonicalAxis(m.clone()), m); });
+  const AX2 = [...axes2Map.values()]; // 15
+
+  // Rotations (60)
+  const qmap = new Map();
+  function addQuat(q){ const key = [q.w.toFixed(12), q.x.toFixed(12), q.y.toFixed(12), q.z.toFixed(12)].join(','); qmap.set(key,q); }
+  addQuat(new THREE.Quaternion(0,0,0,1));
+  [72, -72, 144, -144].forEach(a=> AX5.forEach(ax=> addQuat(quatFromAxisAngle(ax.clone(), deg(a)))));
+  [120, -120].forEach(a=> AX3.forEach(ax=> addQuat(quatFromAxisAngle(ax.clone(), deg(a)))));
+  AX2.forEach(ax=> addQuat(quatFromAxisAngle(ax.clone(), deg(180))));
+  const QUATS = [...qmap.values()]; // 60
+
+  // ===== Three.js scene =====
+  const scene = new THREE.Scene();
+  let R = 1.20;
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 4.0);
+  const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(3,4,5); scene.add(dir);
+
+  // Groups
+  const root = new THREE.Group(); scene.add(root);
+  const content = new THREE.Group(); root.add(content);
+  const overlays = new THREE.Group(); root.add(overlays);
+
+  // Glyph geometries
+  const glyph = {
+    type: 'disc',
+    geoCache: {},
+    getGeometry(kind){
+      if (this.geoCache[kind]) return this.geoCache[kind];
+      let g;
+      if (kind === 'cube'){
+        g = new THREE.BoxGeometry(0.15,0.15,0.15);
+      } else if (kind === 'cone'){
+        g = new THREE.ConeGeometry(0.12, 0.22, 24);
+      } else { // disc (capsomer-ish)
+        g = new THREE.CylinderGeometry(0.18, 0.18, 0.06, 24);
+      }
+      this.geoCache[kind] = g;
+      return g;
+    }
+  };
+
+  let instMat = new THREE.MeshStandardMaterial({ color: 0xaec6ff, metalness:0.1, roughness:0.7 });
+  let inst = new THREE.InstancedMesh(glyph.getGeometry('disc'), instMat, 60);
+  content.add(inst);
+
+  // Sphere context
+  const sphereGeo = new THREE.SphereGeometry(1.0, 32, 16);
+  const sph = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ wireframe:true, color:0x334155 }));
+  sph.scale.setScalar(R); content.add(sph);
+
+  // Overlays
+  function makeAxisLines(axList, colorHex){
+    const g = new THREE.Group();
+    axList.forEach(u=>{
+      const p1 = u.clone().multiplyScalar(-1);
+      const p2 = u.clone().multiplyScalar(+1);
+      const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+      const mat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2 });
+      const line = new THREE.Line(geom, mat);
+      line.scale.setScalar(R);
+      g.add(line);
+    });
+    return g;
+  }
+  const ax5Group = makeAxisLines(AX5, 0xffd166);
+  const ax3Group = makeAxisLines(AX3, 0x06d6a0);
+  const ax2Group = makeAxisLines(AX2, 0x118ab2);
+  overlays.add(ax5Group, ax3Group, ax2Group);
+  ax3Group.visible = false; ax2Group.visible = false;
+
+  // Instance placement
+  const dummy = new THREE.Object3D();
+  const north = new THREE.Vector3(0,0,1);
+  function rebuildInstances(){
+    for(let i=0;i<60;i++){
+      const q = QUATS[i];
+      const p = north.clone().multiplyScalar(R).applyQuaternion(q);
+      dummy.position.copy(p);
+      dummy.quaternion.copy(q);
+      dummy.scale.setScalar(1.0);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    sph.scale.setScalar(R);
+    [ax5Group, ax3Group, ax2Group].forEach(g=> g.children.forEach(line=> line.scale.setScalar(R)));
+    document.getElementById('rval').textContent = R.toFixed(2);
+  }
+  rebuildInstances();
+
+  function rebuildGlyph(kind){
+    if (kind === glyph.type) return;
+    glyph.type = kind;
+    content.remove(inst);
+    inst.geometry.dispose();
+    inst = new THREE.InstancedMesh(glyph.getGeometry(kind), instMat, 60);
+    content.add(inst);
+    rebuildInstances();
+  }
+
+  // Resize
+  window.addEventListener('resize', ()=>{
+    camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Animate
+  let autoRotate = true;
+  function animate(){ requestAnimationFrame(animate); if (autoRotate) root.rotation.y += 0.003; renderer.render(scene, camera); }
+  animate();
+
+  // ===== UI wiring =====
+  const tval = document.getElementById('tval'); const subs = document.getElementById('subs');
+  const vT = document.getElementById('vT'); const vSubs = document.getElementById('vSubs'); const vPent = document.getElementById('vPent'); const vHex = document.getElementById('vHex');
+  function setT(T){
+    tval.textContent = String(T); subs.textContent = String(60*T);
+    vT.textContent = String(T);
+    const {sub, pent, hex} = countsForT(T);
+    vSubs.textContent = String(sub); vPent.textContent = String(pent); vHex.textContent = String(hex);
+  }
+  const presets = { T1:{h:1,k:0,T:1}, T3:{h:1,k:1,T:3}, T7:{h:2,k:1,T:7} };
+  function setPreset(key){ const {T,h,k} = presets[key]; setT(T); document.getElementById('hin').value=h; document.getElementById('kin').value=k; }
+
+  document.querySelectorAll('button[data-preset]').forEach(btn=> btn.addEventListener('click', ()=> setPreset(btn.dataset.preset)));
+  setPreset('T1');
+
+  document.getElementById('apply').addEventListener('click', ()=>{
+    const h = parseInt(document.getElementById('hin').value,10) || 0;
+    const k = parseInt(document.getElementById('kin').value,10) || 0;
+    if (h<0 || k<0 || (h===0 && k===0)){ alert('Use integers h,k ≥ 0 and not both zero.'); return; }
+    setT(T_of(h,k));
+  });
+
+  const rSlider = document.getElementById('rin');
+  rSlider.addEventListener('input', ()=>{ R = parseFloat(rSlider.value); rebuildInstances(); });
+
+  document.getElementById('glyphSel').addEventListener('change', e=> rebuildGlyph(e.target.value));
+  document.getElementById('axes5').addEventListener('change', (e)=> ax5Group.visible = e.target.checked);
+  document.getElementById('axes3').addEventListener('change', (e)=> ax3Group.visible = e.target.checked);
+  document.getElementById('axes2').addEventListener('change', (e)=> ax2Group.visible = e.target.checked);
+  document.getElementById('autorot').addEventListener('change', (e)=> autoRotate = e.target.checked);
+
+  // Views
+  function applyView(kind){
+    autoRotate = false; document.getElementById('autorot').checked = false;
+    const dist = 3.0 * R;
+    if (kind === 'iso'){ camera.position.set(dist*0.7, dist*0.8, dist); }
+    else if (kind === 'top'){ camera.position.set(0, dist, 0.01); }
+    else if (kind === 'side'){ camera.position.set(dist, 0, 0.01); }
+    else if (kind === '5fold'){ const u = AX5[0].clone(); camera.position.copy(u.multiplyScalar(dist)); }
+    else if (kind === '3fold'){ const u = AX3[0].clone(); camera.position.copy(u.multiplyScalar(dist)); }
+    else if (kind === '2fold'){ const u = AX2[0].clone(); camera.position.copy(u.multiplyScalar(dist)); }
+    camera.lookAt(0,0,0);
+  }
+  document.getElementById('applyView').addEventListener('click', ()=> applyView(document.getElementById('viewSel').value));
+
+  // Screenshot with stamp
+  function screenshot(){
+    const label = `T=${tval.textContent}_subs=${subs.textContent}_R=${document.getElementById('rval').textContent}_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}`;
+    const w = renderer.domElement.width, h = renderer.domElement.height;
+    const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d');
+    ctx.drawImage(renderer.domElement, 0, 0);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(10, h-40, 780, 30);
+    ctx.fillStyle = '#e7ecf3'; ctx.font = '16px system-ui'; ctx.fillText(`Icosahedral All‑in‑One (Enhanced) — ${label}`, 18, h-20);
+    const url = c.toDataURL('image/png'); const a = document.createElement('a'); a.href = url; a.download = `capsid_${label}.png`; a.click();
+  }
+  document.getElementById('shot').addEventListener('click', screenshot);
+
+  // Save config
+  document.getElementById('save').addEventListener('click', ()=>{
+    const h = parseInt(document.getElementById('hin').value,10) || 0;
+    const k = parseInt(document.getElementById('kin').value,10) || 0;
+    if (h<0 || k<0 || (h===0 && k===0)){ alert('Use integers h,k ≥ 0 and not both zero.'); return; }
+    const T = T_of(h,k);
+    const cfg = { version: "all-in-one-v2", date: new Date().toISOString(), params: { h, k, T, R }, derived: { subunits: 60*T } };
+    const blob = new Blob([JSON.stringify(cfg, null, 2)], {type: "application/json"});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `capsid_config_T${T}_h${h}_k${k}.json`; a.click();
+    setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
+  });
+
+  // Load config
+  const fileInput = document.getElementById('fileInput');
+  document.getElementById('loadBtn').addEventListener('click', ()=> fileInput.click());
+  fileInput.addEventListener('change', async ()=>{
+    const file = fileInput.files[0]; if (!file) return;
+    try {
+      const text = await file.text(); const cfg = JSON.parse(text); const { params } = cfg || {};
+      if (!params) throw new Error('Missing params in config');
+      const h = parseInt(params.h ?? 0, 10); const k = parseInt(params.k ?? 0, 10);
+      let T = parseInt(params.T ?? T_of(h,k), 10); const R_loaded = parseFloat(params.R ?? 1.2);
+      const T_check = T_of(h,k); if (T !== T_check){ console.warn('Config T mismatch; recomputed from (h,k).'); T = T_check; }
+      document.getElementById('hin').value = String(h); document.getElementById('kin').value = String(k); document.getElementById('rin').value = String(R_loaded.toFixed(2));
+      setT(T); R = R_loaded; rebuildInstances();
+    } catch(e){ alert('Could not load config: ' + (e && e.message ? e.message : e)); }
+    finally { fileInput.value=''; }
+  });
+
+  // Export validation JSON/CSV
+  function currentState(){
+    const h = parseInt(document.getElementById('hin').value,10) || 0;
+    const k = parseInt(document.getElementById('kin').value,10) || 0;
+    const T = T_of(h,k);
+    const {sub, pent, hex} = countsForT(T);
+    const Rv = parseFloat(document.getElementById('rval').textContent);
+    return { date:new Date().toISOString(), h, k, T, subunits: sub, pentamers: pent, hexamers: hex, R: Rv };
+  }
+  document.getElementById('exportJSON').addEventListener('click', ()=>{
+    const s = currentState();
+    const blob = new Blob([JSON.stringify(s, null, 2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `validation_T${s.T}_h${s.h}_k${s.k}.json`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  });
+  document.getElementById('exportCSV').addEventListener('click', ()=>{
+    const s = currentState();
+    const header = ['date','h','k','T','subunits','pentamers','hexamers','R'].join(',');
+    const row = [s.date, s.h, s.k, s.T, s.subunits, s.pentamers, s.hexamers, s.R].join(',');
+    const blob = new Blob([header+'\n'+row+'\n'], {type:'text/csv'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `validation_T${s.T}_h${s.h}_k${s.k}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  });
+  </script>
+</body>
+</html>
