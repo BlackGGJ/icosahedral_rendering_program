@@ -1,0 +1,172 @@
+import plotly.graph_objects as go
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+from sklearn.decomposition import PCA
+
+def gen_icosahedron_vert():
+    phi = (1 + np.sqrt(5)) / 2  # Golden ratio
+    vertices = np.array([
+        (-1,  phi, 0), (1,  phi, 0), (-1, -phi, 0), (1, -phi, 0),
+        (0, -1,  phi), (0, 1,  phi), (0, -1, -phi), (0, 1, -phi),
+        ( phi, 0, -1), ( phi, 0, 1), (-phi, 0, -1), (-phi, 0, 1)
+    ])
+    return vertices
+
+def gen_icosahedron_faces():
+    return np.array([
+        [0, 11, 5],[0, 5, 1],[0, 1, 7],[0, 7,10], [0,10,11]
+        ,[1, 5, 9], [5,11,4], [11,10,2], [10,7,6], [7,1,8],
+        [3,9,4], [3,4,2], [3,2,6], [3,6,8], [3,8,9],
+        [4,9,5], [2,4,11], [6,2,10], [8,6,7], [9,8,1]
+    ])
+
+def read_pdb(filename):
+    atoms = []
+    with open(filename, 'r') as pdb_file:
+        for line in pdb_file:
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                x, y, z = map(float, [line[30:38], line[38:46], line[46:54]])
+                atoms.append(np.array([x, y, z]))
+    return np.array(atoms) - np.mean(atoms, axis=0)  # Center monomer at origin
+
+def scale_monomer_to_fit_triangle(monomer_coords, triangle_vertices):
+    side_lengths = [np.linalg.norm(triangle_vertices[i] - triangle_vertices[j])
+                    for i in range(3) for j in range(i+1, 3)]
+    avg_side_length = np.mean(side_lengths)
+    monomer_size = np.max(np.linalg.norm(monomer_coords - np.mean(monomer_coords, axis=0), axis=1)) * 2
+    target_size = 0.6* avg_side_length
+    scale_factor = (target_size / monomer_size) *2
+    return monomer_coords * scale_factor
+
+def detect_main_axis(monomer_coords):
+    """Detects the main axis of the monomer using PCA."""
+    pca = PCA(n_components=3)
+    pca.fit(monomer_coords)
+    return pca.components_[0]  # Principal direction of elongation
+
+def align_monomer_into_triangle(vertex, triangle_vertices, monomer_coords, inward_scale=0.4):
+    """
+    Aligns and positions the monomer such that it's anchored to a triangle vertex,
+    and points inward toward the triangle center.
+    """
+
+    # 1. Detect the monomer's default "forward" axis using PCA
+    reference_vector = detect_main_axis(monomer_coords)
+
+    # 2. Compute direction vector from triangle vertex to center
+    triangle_center = np.mean(triangle_vertices, axis=0)
+    target_vector = triangle_center - vertex
+    target_vector /= np.linalg.norm(target_vector)
+
+    # 3. Calculate the rotation required to align the monomer
+    rotation_axis = np.cross(reference_vector, target_vector)
+    if np.linalg.norm(rotation_axis) < 1e-6:
+        rotated_monomer = monomer_coords  # Already aligned
+    else:
+        rotation_axis /= np.linalg.norm(rotation_axis)
+        angle = np.arccos(np.clip(np.dot(reference_vector, target_vector), -1.0, 1.0))
+        rotation = R.from_rotvec(angle * rotation_axis)
+        rotated_monomer = rotation.apply(monomer_coords)
+
+    # 4. Position the rotated monomer inward from the vertex (toward center of triangle)
+    final_position = vertex + inward_scale * target_vector
+    return rotated_monomer + final_position
+
+
+"""def write_pdb(atoms, filename):
+    with open(filename, "w") as f:
+        for i, atom in enumerate(atoms):
+            f.write(
+                f"ATOM  {i + 1:5d}   CA ALA A   1    {atom[0]:8.3f}{atom[1]:8.3f}{atom[2]:8.3f}  1.00  0.00           C\n"
+
+            )
+        f.write("END\n")"""
+def write_xyz(atoms, filename, element="C"):
+    with open(filename, "w") as f:
+        f.write(f"{len(atoms)}\n")
+        f.write("Generated monomer structure\n")
+        for atom in atoms:
+            f.write(f"{element} {atom[0]:.3f} {atom[1]:.3f} {atom[2]:.3f}\n")
+
+
+def visualize_and_save_pentamers(monomer, vertices, faces):
+    fig = go.Figure()
+    all_atoms = []
+    colors = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow', 'lime', 'teal']
+
+    # Plot triangle faces
+    face_x, face_y, face_z = [], [], []
+    i_list, j_list, k_list = [], [], []
+    for idx, face in enumerate(faces):
+        v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
+        face_x.extend([v0[0], v1[0], v2[0]])
+        face_y.extend([v0[1], v1[1], v2[1]])
+        face_z.extend([v0[2], v1[2], v2[2]])
+        i_list.append(idx * 3)
+        j_list.append(idx * 3 + 1)
+        k_list.append(idx * 3 + 2)
+
+    fig.add_trace(go.Mesh3d(
+        x=face_x, y=face_y, z=face_z,
+        i=i_list, j=j_list, k=k_list,
+        opacity=0.2,
+        color='black',
+        name='Icosahedron Faces',
+        showscale=False
+    ))
+
+    for idx, face in enumerate(faces):
+        print("idx",idx)
+        print(face)
+        triangle_vertices = vertices[face]
+        print(triangle_vertices)
+
+        scaled_monomer = scale_monomer_to_fit_triangle(monomer, triangle_vertices)
+
+        face_atoms=[]
+
+        for local_idx, vertex_index in enumerate(face):
+            print("local_idx",local_idx)
+            vertex = vertices[vertex_index]
+            print("vertex index",vertex_index)
+            print("vertex",vertex)
+            aligned_monomer = align_monomer_into_triangle(vertex, triangle_vertices, scaled_monomer)
+
+            color = colors[vertex_index % len(colors)]
+            fig.add_trace(go.Scatter3d(
+                x=aligned_monomer[:, 0], y=aligned_monomer[:, 1], z=aligned_monomer[:, 2],
+                mode='markers', marker=dict(size=1.5, color=color), name=f'Triangle {idx+1} Mono {local_idx+1}'
+            ))
+            face_atoms.append(aligned_monomer)
+
+            # Write the monomers for this face into a PDB
+        #face_atoms = np.vstack(face_atoms)
+        #write_pdb(face_atoms, f"face_{idx:02d}.pdb")
+        #print(f"Saved: face_{idx:02d}.pdb")
+        for local_idx, aligned_monomer in enumerate(face_atoms):
+            #write_pdb(aligned_monomer, f"face_{idx:02d}_mono_{local_idx + 1}.pdb")
+            write_xyz(aligned_monomer, f"face_{idx:02d}_mono_{local_idx + 1}.xyz")
+            print(f"Saved: face_{idx:02d}_mono_{local_idx + 1}.pdb")
+
+
+
+    fig.add_trace(go.Scatter3d(
+        x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+        mode='markers', marker=dict(size=5, color='black'), name='Icosahedron Vertices'
+    ))
+
+    fig.update_layout(
+        title="Pentamers on Icosahedron with Triangle Faces",
+        scene=dict(xaxis_title='X', yaxis_title='Y', zaxis_title='Z'),
+        margin=dict(l=0, r=0, b=0, t=40)
+    )
+
+    fig.show()
+
+# -------------------------------
+monomer_file = "C:\Users\gjaku\OneDrive\Pulpit\DTU\Master_Thesis_Tom\Icosahedral_all\6JCR.pdb"
+monomer_coords = read_pdb(monomer_file)
+icosahedron_vertices = generate_icosahedron_vertices()
+icosahedron_faces = generate_icosahedron_faces()
+
+visualize_and_save_pentamers(monomer_coords, icosahedron_vertices, icosahedron_faces)
