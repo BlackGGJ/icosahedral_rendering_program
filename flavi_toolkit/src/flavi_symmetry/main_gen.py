@@ -2,7 +2,7 @@ import numpy as np
 from Bio import PDB
 import string
 import warnings
-import copy  # <--- Added this to clone chains
+import copy 
 warnings.filterwarnings("ignore")
 
 # --- SETTINGS ---
@@ -93,10 +93,7 @@ def run():
                 # atom.transform expects rotation and translation
                 atom.transform(rot, trans)
             
-            # --- 3. TAGGING LOGIC (Injected here for efficiency) ---
-            
-            # Give it a unique ID to satisfy PyMOL
-            # Example: If chain_counter is 100, ID is chars[100] (or wrapped)
+           
             new_id_char = chars[chain_counter % len(chars)]
             # If we run out of chars, we append a number (A1, B1...) logic is safer:
             suffix = str(chain_counter // len(chars)) if chain_counter >= len(chars) else ""
@@ -138,4 +135,5 @@ def run():
     print("DONE. The virus is built.")
 
 if __name__ == "__main__":
+
     run()
